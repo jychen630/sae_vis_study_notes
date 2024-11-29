@@ -78,10 +78,19 @@ class AutoEncoder(nn.Module):
         self.W_dec.data[:] = self.W_dec / self.W_dec.norm(dim=-1, keepdim=True)
 
     def forward(self, x: torch.Tensor):
+        # reconstruct and compute loss
+        # loss = reconstruction loss + sparsity loss
+        # reconstruction loss = l2(x, dec(enc(x)))
+        # sparsity loss = l1(enc(x)) = l1(acts)
+        # acts = enc(x) = ReLU(W_enc @ x + b_enc)
+        # dec(acts) = W_dec @ acts + b_dec = W_dec @ ReLU(W_enc @ x + b_enc) + b_dec
+
         x_cent = x - self.b_dec
         acts = F.relu(x_cent @ self.W_enc + self.b_enc)
         x_reconstruct = acts @ self.W_dec + self.b_dec
+        # reconstruction loss
         l2_loss = (x_reconstruct.float() - x.float()).pow(2).sum(-1).mean(0)
+        # sparsity loss. using l1 as a good proxy of l0 to encourage sparse solutions (like lasso rgression)
         l1_loss = self.cfg.l1_coeff * (acts.float().abs().sum())
         loss = l2_loss + l1_loss
         return loss, x_reconstruct, acts, l2_loss, l1_loss
@@ -193,7 +202,9 @@ class TransformerLensWrapper(nn.Module):
                 (self.hook_point_resid_final, self.hook_fn_store_act)
             ]
         )
-
+        print("hook_point", self.hook_point)
+        print("hook_point_resid_final", self.hook_point_resid_final)
+        print("self.model.hook_dict[self.hook_point].ctx", str(self.model.hook_dict[self.hook_point].ctx.keys()))
         # The hook functions work by storing data in model's hook context, so we pop them back out
         activation: Tensor = self.model.hook_dict[self.hook_point].ctx.pop("activation")
         if self.hook_point_resid_final == self.hook_point:
@@ -238,6 +249,7 @@ def to_resid_dir(dir: Float[Tensor, "feats d_in"], model: TransformerLensWrapper
     
     # If it was trained on the MLP layer, then we apply the W_out map
     elif ("pre" in model.hook_point) or ("post" in model.hook_point):
+        print(f"model.hook_layer={model.hook_layer}")
         return dir @ model.W_out[model.hook_layer]
     
     # Others not yet supported

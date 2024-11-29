@@ -415,7 +415,12 @@ class SequenceData:
         toks = to_str_tokens(decode_fn, self.token_ids)
         pos_toks = [to_str_tokens(decode_fn, pos) for pos in pos_ids]
         neg_toks = [to_str_tokens(decode_fn, neg) for neg in neg_ids]
-
+        print(">"*100)
+        print(f"processing toks in SequenceData._get_html_data")
+        print(f"toks: {toks}")
+        print(f"pos_toks: {pos_toks}")
+        print(f"neg_toks: {neg_toks}")
+        print("<"*100)
         # Define the JavaScript object which will be used to populate the HTML string
         js_data_list = []
 
@@ -445,8 +450,16 @@ class SequenceData:
                 if hover_above:
                     kwargs_hover_above["hoverAbove"] = True
 
+                print("len(feat_acts)", len(feat_acts)) # 1 + 5 + 5 = size(buffer) = 11
+                print("len(token_ids)", len(self.token_ids)) # 1 + 5 + 5 = size(buffer) + 1 = 11
+                print("token_ids[:4], token_ids[-4:]", self.token_ids[:4], self.token_ids[-4:])
+                print("decoded(token_ids[:4])", [decode_fn(tok) for tok in self.token_ids[:4]])
+                print("decoded(token_ids[-4:])", [decode_fn(tok) for tok in self.token_ids[-4:]])
                 # If feature active on this token, get background color and feature act (for hist line)
-                if abs(feat_acts[i]) > 1e-8:
+                if feat_acts[i] < 0: # conclusion: This if is not executed
+                    print("!"*100)
+                    print(f"Negative feature act for i={i}, token_ids[i]={self.token_ids[i]}, decoded(token_ids[i])={decode_fn(self.token_ids[i])}")
+                if abs(feat_acts[i]) > 1e-8: # if relu applied, why abs? -> toy experiments show abs() is unnecessary
                     kwargs_this_token_active = dict(
                         featAct = round(feat_acts[i], PRECISION),
                         bgColor = bgColorMap(bg_values[i]),

@@ -59,6 +59,7 @@ def k_largest_indices(
     largest: bool = True,
     buffer: Tuple[int, int] = (5, -5),
 ) -> Int[Tensor, "k 2"]:
+    # find 20 indices such that the values of x.flatten() at those indices are the largest
     '''
     Args:
         x:
@@ -75,10 +76,40 @@ def k_largest_indices(
         The indices of the top or bottom `k` elements in `x`. In other words, output[i, :] is the (row, column) index of
         the i-th largest/smallest element in `x`.
     '''
+    # Final x.shape[1] = len(x.shape[1]) - (buffer[0] + abs(buffer[1]))
+    # e.g x = [list(range(0,100)) for _ in range(42)]  -> x.shape = (42, 100)
+    # x[:, 6: -5].shape[1] = 100 - (6 + 5) = 89
+    # x[:, 6:-5] = 
+    # x[:, 6:-5] = (42, 89)
+    # >>> x[:, 6:-5]
+    # array([[ 6,  7,  8, ..., 92, 93, 94],
+    #    [ 6,  7,  8, ..., 92, 93, 94],
+    #    [ 6,  7,  8, ..., 92, 93, 94],
+    #    ...,
+    #    [ 6,  7,  8, ..., 92, 93, 94],
+    #    [ 6,  7,  8, ..., 92, 93, 94],
+    #    [ 6,  7,  8, ..., 92, 93, 94]])
+    print("in k_largest_indices before buffer-indexing: x.shape", x.shape)
     x = x[:, buffer[0]: buffer[1]]
+    print("in k_largest_indices after buffer-indexing: x.shape", x.shape)
+    # x.flatten() -> shape becomes (42*89)
+    # >>> x.flatten().topk(k=k, largest=largest)
+    # values=tensor([94, 94, 94, 94, 94]),
+    # indices=tensor([ 88, 177, 355, 444, 266]))
     indices = x.flatten().topk(k=k, largest=largest).indices
+    # rows = indices // x.size(1) = [88, 177, 355, 444, 266] // 89 = [0, 1, 3, 4, 2]
     rows = indices // x.size(1)
+    # cols = indices % x.size(1) + buffer[0] = [88, 177, 355, 444, 266] % 89 + 6 = [88, 88, 88, 88, 88] + 6 = [94, 94, 94, 94, 94]
     cols = indices % x.size(1) + buffer[0]
+    # >>> output := torch.stack((rows, cols), dim=1)
+    # tensor([[ 0, 88],
+    #         [ 1, 88],
+    #         [ 3, 88],
+    #         [ 4, 88],
+    #         [ 2, 88]])
+    # The output[i,:] is the (row, col) index of the i-th largest element in x.
+    # [0, 88] is the index of the 0-th largest element in x, which is 94.
+    print("in k_largest_indices upon returning the positions torch.stack((rows, cols), dim=1)", torch.stack((rows, cols), dim=1).shape)
     return torch.stack((rows, cols), dim=1)
 
 
@@ -155,7 +186,10 @@ def random_range_indices(
 
 
 def get_decode_html_safe_fn(tokenizer, html: bool = False) -> Callable[[int | list[int]], str | list[str]]:
-
+    # why passing html false here...
+    # if html=false, then it wont happen that special HTML characters like "<" will be 
+    # replaced with their HTML representations. e.g. "<" -> "&lt;", or " " -> "&nbsp;"
+    # nevertheless, using chrome, HTML raw representation like "&amp" and "&rdquo" can be seen.
     vocab_dict = {v: k for k, v in tokenizer.vocab.items()} # type: ignore
 
     def decode(token_id: int | list[int]) -> str | list[str]:

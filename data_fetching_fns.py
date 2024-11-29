@@ -82,11 +82,21 @@ def compute_feat_acts(
             The object storing minimal data to compute corrcoef between feature activations & encoder-B features.
     '''
     # Get the feature act direction by indexing encoder.W_enc, and the bias by indexing encoder.b_enc
+    print(f"encoder.W_enc.shape: {encoder.W_enc.shape}")
+    print(f"encoder.b_enc.shape: {encoder.b_enc.shape}")
+    print(f"feature_idx length: {len(feature_idx)}")
+    print(f"feature_idx[:5]: {feature_idx[:5]}")
+    print(f"feature_idx[:-5]: {feature_idx[:-5]}")
     feature_act_dir = encoder.W_enc[:, feature_idx] # (d_in, feats)
     feature_bias = encoder.b_enc[feature_idx] # (feats,)
-
+    print(f"feature_act_dir.shape: {feature_act_dir.shape}")
+    print(f"feature_bias.shape: {feature_bias.shape}")
+    
+    print(f"model_acts.shape: {model_acts.shape}")
+    print(f"encoder.b_dec.shape: {encoder.b_dec.shape}")
     # Calculate & store feature activations (we need to store them so we can get the sequence & histogram vis later)
     x_cent = model_acts - encoder.b_dec
+    print(f"x_cent.shape: {x_cent.shape}")
     feat_acts_pre = einops.einsum(x_cent, feature_act_dir, "batch seq d_in, d_in feats -> batch seq feats")
     feat_acts = F.relu(feat_acts_pre + feature_bias)
 
@@ -205,10 +215,15 @@ def parse_feature_data(
     # Make feature_indices a list, for convenience
     if isinstance(feature_indices, int): feature_indices = [feature_indices]
 
+    # the sae we fetched from Neel is trained on the MLP layer
+    # which was computed by dir @ model.W_out[model.hook_layer]
     assert feature_resid_dir.shape[0] == len(feature_indices),\
         f"Num features in feature_resid_dir ({feature_resid_dir.shape[0]}) doesn't match {len(feature_indices)=}"
     
     if feature_out_dir is not None:
+        # the f-string has a typo in its variable name
+        # should be feature_out_dir rather than feature_resid_dir
+        # although numerically and technically they are the same
         assert feature_out_dir.shape[0] == len(feature_indices),\
             f"Num features in feature_out_dir ({feature_resid_dir.shape[0]}) doesn't match {len(feature_indices)=}"
 
@@ -494,6 +509,9 @@ def _get_feature_data(
 
     all_feat_acts = torch.cat(all_feat_acts, dim=0)
     all_resid_post = torch.cat(all_resid_post, dim=0)
+    print(f"all_feat_acts.shape: {all_feat_acts.shape}")
+    print(f"all_feat_acts dtype: {all_feat_acts.dtype}")
+    print(f"all_feat_acts: {all_feat_acts}")
 
     # ! Use the data we've collected to make a MultiFeatureData object
     sae_vis_data, _time_logs = parse_feature_data(
@@ -555,6 +573,8 @@ def get_feature_data(
         tokens = tokens[:cfg.batch_size]
 
     # Get a feature list (need to deal with the case where `cfg.features` is an int, or None)
+    print(f"in get_feature_data, cfg.features: {cfg.features}")
+    print(f"encoder.cfg.d_hidden: {encoder.cfg.d_hidden}")
     if cfg.features is None:
         assert isinstance(encoder.cfg.d_hidden, int)
         features_list = list(range(encoder.cfg.d_hidden))
@@ -562,9 +582,13 @@ def get_feature_data(
         features_list = [cfg.features]
     else:
         features_list = list(cfg.features)
-
+    print(f"cfg.minibatch_size_features: {cfg.minibatch_size_features}")
     # Break up the features into batches
     feature_batches = [x.tolist() for x in torch.tensor(features_list).split(cfg.minibatch_size_features)]
+    print(f"feature_batches.length: {len(feature_batches)}")
+    for i, batch in enumerate(feature_batches):
+        print(f"batch {i}: {batch}")
+        print("="*20)
     # Calculate how many minibatches of tokens there will be (for the progress bar)
     n_token_batches = 1 if (cfg.minibatch_size_tokens is None) else math.ceil(len(tokens) / cfg.minibatch_size_tokens)
     # Get the denominator for each of the 2 progress bars
@@ -654,36 +678,102 @@ def get_sequences_data(
             contains the data for a particular group of sequences (i.e. the top-k, bottom-k, and the quantile groups).
     '''
 
+    print(f"feat_acts.shape: {feat_acts.shape}")
+    print(f"feat_acts dtype: {feat_acts.dtype}")
+    #print(f"feat_acts: {feat_acts}")
+
     # ! (1) Find the tokens from each group
 
     # Get buffer, s.t. we're looking for bold tokens in the range `buffer[0] : buffer[1]`. For each bold token, we need
     # to see `seq_cfg.buffer[0]+1` behind it (plus 1 because we need the prev token to compute loss effect), and we need
     # to see `seq_cfg.buffer[1]` ahead of it
-    buffer = (seq_cfg.buffer[0]+1, -seq_cfg.buffer[1])
-
+    buffer = (seq_cfg.buffer[0]+1, -seq_cfg.buffer[1]) # (5+1, -5)
+    print("seq_cfg.buffer[0]+1", seq_cfg.buffer[0]+1)
+    print("-seq_cfg.buffer[1]", -seq_cfg.buffer[1]) 
+    print("buffer", buffer)
     # Get the top-activating tokens
+    # top_acts_group_size by default is 20
     indices = k_largest_indices(feat_acts, k=seq_cfg.top_acts_group_size, buffer=buffer)
     indices_dict = {f"TOP ACTIVATIONS<br>MAX = {feat_acts.max():.3f}": indices}
-
+    print(f"after k_largest_indices: indices.shape = {indices.shape}")
     # Get all possible indices. Note, we need to be able to look 1 back (feature activation on prev token is needed for
     # computing loss effect on this token)
+    # n_quantiles by default is 10
     if seq_cfg.n_quantiles > 0:
         quantiles = torch.linspace(0, feat_acts.max().item(), seq_cfg.n_quantiles+1)
-        for i in range(seq_cfg.n_quantiles-1, -1, -1):
+        # >>> torch.linspace(0, 100, 11)
+        # tensor([  0.,  10.,  20.,  30.,  40.,  50.,  60.,  70.,  80.,  90., 100.])
+        for i in range(seq_cfg.n_quantiles-1, -1, -1): #9, 8, 7, ..., 0
             lower, upper = quantiles[i:i+2].tolist()
             pct = ((feat_acts >= lower) & (feat_acts <= upper)).float().mean()
+            # quantile_group_size by default is 5
+            # random_range_indices: Same thing as k_largest_indices, but using quantiles rather than top/bottom k
             indices = random_range_indices(feat_acts, k=seq_cfg.quantile_group_size, bounds=(lower, upper), buffer=buffer)
             indices_dict[f"INTERVAL {lower:.3f} - {upper:.3f}<br>CONTAINS {pct:.3%}"] = indices
 
+    print(f"indices_dict length: {len(indices_dict)}")
     # Concat all the indices together (in the next steps we do all groups at once)
-    indices_bold = torch.concat(list(indices_dict.values())).cpu() # shape [batch 2]
-
+    indices_bold = torch.concat(list(indices_dict.values())).cpu() # shape [batch 2] # batch=10 quantiles + 1 group_of_20 = 11, not the batch of the tokens！
+    print(f"indices_bold: {indices_bold}")
 
     # ! (2) Get the buffer indices
 
     # Get the buffer indices, by adding a broadcasted arange object. At this point, indices_buf contains 1 more token
     # than the length of the sequences we'll see (because it also contains the token before the sequence starts).
+    # e.g  buffer_tensor = tensor([-6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5])
     buffer_tensor = torch.arange(-seq_cfg.buffer[0] - 1, seq_cfg.buffer[1] + 1, device=indices_bold.device)
+
+    # batch two means [batch 2] = shape of [11 2]
+    # seq = (5 + 1) left + 1 center + 5 right = 12  -> totally different meaning from batch of 11
+    # indices_bold = tensor([
+    #       [43, 106],
+    #       [58,  91],
+    #       [77,  96],
+    #       [33, 107],
+    #       [73,  81],
+    #       [63,  85],
+    #       [ 0,  19],
+    #       [ 0,  18],
+    #       [ 0,  14],
+    #       [ 0,  15],
+    #       [ 0,  16],
+    #       [ 0,  17],
+    #       [ 0,  13],
+    #       [ 0,  12],
+    #       [ 0,   7],
+    #       [26,  57],
+    #       [76,  70],
+    #       [56,  63]
+    #   ])
+
+    # indices_buf = tensor([
+    #        [[43, 106], [43, 106], ..., [43, 106]],  # 12 times
+    #        [[58,  91], [58,  91], ..., [58,  91]],  # 12 times
+    #        ...
+    #        [[56,  63], [56,  63], ..., [56,  63]]   # 12 times
+    #    ])
+
+    # indices_buf[..., 0] =   tensor([
+    #       [43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43],
+    #       [58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58],
+    #       ...
+    #       [56, 56, 56, 56, 56, 56, 56, 56, 56, 56, 56, 56]
+    #   ])
+
+    # indices_buf[..., 1] =   tensor([
+    #       [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111],
+    #       [ 85,  86,  87,  88,  89,  90,  91,  92,  93,  94,  95,  96],
+    #       ...
+    #       [ 57,  58,  59,  60,  61,  62,  63,  64,  65,  66,  67,  68]
+    #   ])
+
+    # indices_buf after torch.stack at last dim (dim=-1):
+    #    indices_buf = torch.tensor([
+    #        [[43, 100], [43, 101], ..., [43, 111]],
+    #        [[58,  85], [58,  86], ..., [58,  96]],
+    #        ...
+    #        [[56,  57], [56,  58], ..., [56,  68]]
+    #    ])
     indices_buf = einops.repeat(indices_bold, "batch two -> batch seq two", seq=seq_cfg.buffer[0] + seq_cfg.buffer[1] + 2)
     indices_buf = torch.stack([indices_buf[..., 0], indices_buf[..., 1] + buffer_tensor], dim=-1)
 
@@ -691,20 +781,27 @@ def get_sequences_data(
     # ! (3) Extract the token IDs, feature activations & residual stream values for those positions
 
     # Get the tokens which will be in our sequences
+    print(f"tokens: {tokens}")
+    # Extract token_ids whose indices are specified in indices_buf
     token_ids = eindex(tokens, indices_buf[:, 1:], "[batch seq 0] [batch seq 1]") # shape [batch buf]
-
+    print("token_ids.shape", token_ids.shape)
+    print("token_ids", token_ids)
     # Now, we split into cases depending on whether we're computing the buffer or not. One kinda weird thing: we get
     # feature acts for 2 different reasons (token coloring & ablation), and in the case where we're computing the buffer
     # we need [:, 1:] for coloring and [:, :-1] for ablation, but when we're not we only need [:, bold] for both. So
     # we split on cases here.
     if seq_cfg.compute_buffer:
+        print("BUFFERING!")
         feat_acts_buf = eindex(feat_acts, indices_buf, "[batch buf_plus1 0] [batch buf_plus1 1]")
+        print("feat_acts_buf.shape", feat_acts_buf.shape)
+        print("feat_acts_buf", feat_acts_buf)
         feat_acts_pre_ablation = feat_acts_buf[:, :-1]
         feat_acts_coloring = feat_acts_buf[:, 1:]
         resid_post_pre_ablation = eindex(resid_post, indices_buf[:, :-1], "[batch buf 0] [batch buf 1] d_model")
         # The tokens we'll use to index correct logits are the same as the ones which will be in our sequence
         correct_tokens = token_ids
     else:
+        print("ABLATION!")
         feat_acts_pre_ablation = eindex(feat_acts, indices_bold, "[batch 0] [batch 1]").unsqueeze(1)
         feat_acts_coloring = feat_acts_pre_ablation
         resid_post_pre_ablation = eindex(resid_post, indices_bold, "[batch 0] [batch 1] d_model").unsqueeze(1)
@@ -969,7 +1066,7 @@ def get_prompt_data(
     resid_post, act_post = model_wrapped(tokens, return_logits=False)
     resid_post: Tensor = resid_post.squeeze(0)
     feat_acts = compute_feat_acts(act_post, feature_idx, encoder).squeeze(0) # [seq feats]
-
+    print(f"feat_acts.shape: {feat_acts.shape}")
     
     # ! Use the data we've collected to make the scores_dict and update the sae_vis_data
     scores_dict = parse_prompt_data(
